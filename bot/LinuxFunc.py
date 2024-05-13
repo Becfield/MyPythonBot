@@ -111,6 +111,13 @@ def getServices(update: Update, context):
 
 
 def getReplLogs(update: Update, context):
-    command = 'docker logs db_container 2>&1 | grep replication | tail -n 10'
-    update.message.reply_text(f"{sshConnect(command)}")
-
+    command = 'grep -E \"repl_user|database\" /var/log/postgresql/postgresql-15-main.log'
+    logs_info = sshConnect(command)
+    if logs_info:
+        lines = logs_info.strip().split('\n')
+        # Отправляем каждую строку в отдельном сообщении
+        for i in range(0, len(lines), 20):
+            time.sleep(1)
+            update.message.reply_text('\n'.join(lines[i:i + 20]))
+    else:
+        update.message.reply_text('Логи не найдены.')
