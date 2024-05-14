@@ -1,0 +1,23 @@
+# Необходимо добавить пользователя и пароль этой машины, на которой развернется бот и мастер сервер БД
+[localhost]
+127.0.0.1 ansible_connection=local ansible_user= ansible_password=
+
+# Необходимо указать токен бота, ip адрес данной машины, пароль от учетных записей и сеть в которой вы находитесь, без маски подсети
+[localhost:vars]
+token = 
+master_host=
+postgres_password=
+repl_user_password=
+local_network = #192.168.1.1
+
+
+# Здесь указывается имя пользователя, пароль и ip удаленной машины, на которой развернется Slave сервер для репликации.
+# Не забудьте дать пользователю NOPASSWD: ALL, а то не получится выполнять команды!!!
+[remote_host]
+my_remote_host ansible_host= ansible_user= ansible_password=
+
+#Здесь дублируем ansible_host который указали в remote_host
+[remote_host:vars]
+remote_host_ip=
+
+

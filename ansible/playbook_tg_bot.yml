@@ -1,0 +1,218 @@
+---
+- name: Install PostgreSQL and PostgreSQL-contrib
+  hosts: localhost, my_remote_host
+  become: yes
+
+  tasks:
+    - name: Install
+      apt:
+        name:
+          - postgresql
+          - postgresql-contrib
+
+- name: Install PostgreSQL and PostgreSQL-contrib
+  hosts: my_remote_host
+  become: yes
+  tasks:
+    - name: Install
+      apt:
+        name:
+          - postgresql
+          - postgresql-contrib
+
+
+- name: Configure main db
+  hosts: localhost
+  become: yes
+
+  vars:
+    repl_user_password: "{{ hostvars['localhost']['repl_user_password'] }}"
+    remote_host: "{{ hostvars['my_remote_host']['remote_host_ip'] }}"
+
+  tasks:
+
+    - name: Install psycopg2 Python library
+      package:
+        name: python3-psycopg2
+
+    - name: Create replication user
+      postgresql_user:
+        name: repl_user
+        password: "{{ repl_user_password }}"
+      become_user: postgres
+
+    - name: Grant replication privileges to the user
+      postgresql_query:
+        query: "ALTER ROLE repl_user WITH REPLICATION"
+      become_user: postgres
+
+    - name: Replace postgresql.conf to repl_postgresql.conf
+      copy:
+        src: ~/MyPythonBot/ansible/repl_postgresql.conf
+        dest: /etc/postgresql/15/main/postgresql.conf
+      become: yes
+      become_user: postgres
+
+
+    - name: ADD ACL to logs
+      shell: chmod +r /var/log/postgresql/postgresql-15-main.log
+
+    - name: ADD current_hosts to pg_hba.conf
+      lineinfile:
+        path: /etc/postgresql/15/main/pg_hba.conf
+        line: "host    all             all             {{ local_network }}/24          password"
+        insertafter: EOF
+      become_user: postgres 
+
+    - name: add replication rule
+      lineinfile:
+        path: /etc/postgresql/15/main/pg_hba.conf
+        line: "host    replication     repl_user       {{ remote_host }}/24         scram-sha-256"
+        insertafter: EOF
+      become_user: postgres
+
+    - name: Restart Postgresql
+      systemd:
+        name: postgresql
+        state: restarted
+
+
+- name: Configure replication database
+  hosts: my_remote_host
+  become: yes
+
+  vars: 
+    master_ip: "{{ hostvars['localhost']['master_host'] }}"
+    repl_user_password: "{{ hostvars['localhost']['repl_user_password'] }}"
+    remote_name: "{{ hostvars['my_remote_host']['ansible_user'] }}"
+
+  tasks:
+    - name: Stop Postgresql
+      systemd:
+        name: postgresql
+        state: stopped  
+
+    - name: Add master ip to listen_addresses
+      lineinfile:
+        path: /etc/postgresql/15/main/postgresql.conf
+        regexp: '^#?listen_addresses = .*'
+        line: "listen_addresses = 'localhost, {{ master_ip }}'    # what IP address(es) to listen on;"
+
+    - name: Remove files from the main directory
+      shell: rm -rf /var/lib/postgresql/15/main/*
+    
+    - name: Install pexpect 
+      package:
+        name: python3-pexpect
+
+    - name: Run pg_basebackup command
+      expect:
+        command: pg_basebackup -R -h {{ master_ip }} -U repl_user -D /var/lib/postgresql/15/main -P
+        responses:
+          Password: "{{ repl_user_password }}"
+
+    - name: add chown
+      shell: chown -R postgres:postgres /var/lib/postgresql/15/main
+
+    - name: Start Postgresql
+      systemd:
+        name: postgresql
+        state: started
+
+
+
+- name: Init Database
+  hosts: localhost
+  become: yes
+  
+  vars:
+    postgres_password: "{{ hostvars['localhost']['postgres_password'] }}"
+    local_network: "{{ hostvars['localhost']['local_network'] }}"
+
+  tasks:
+
+    - name: Set a password postgres user
+      postgresql_query:
+        query: "ALTER ROLE postgres PASSWORD '{{ postgres_password }}';"
+      become_user: postgres
+
+    - name: Create database
+      postgresql_db:
+        name: db_pythonbot
+      become_user: postgres      
+
+    - name: Copy init.sql in postgres_dir
+      copy:
+        src: "{{ lookup('env', 'HOME') }}/MyPythonBot/ansible/init.sql"
+        dest: /var/lib/postgresql/init.sql
+        owner: postgres
+        group: postgres
+        mode: '0644'
+
+    - name: Insert DATABASE
+      command: psql -d db_pythonbot -f /var/lib/postgresql/init.sql
+      become_user: postgres
+
+
+- name: PythonBot configuration
+  hosts: localhost
+  become: yes
+
+  vars:
+    master_ip: "{{ hostvars['localhost']['master_host'] }}"
+    postgress_pass: "{{ hostvars['localhost']['postgres_password'] }}"
+    token: "{{ hostvars['localhost']['token'] }}"
+
+  tasks:
+
+    - name: Install git
+      package:
+        name: git
+
+    - name: git clone PythonBot
+      git:
+        repo: https://github.com/Becfield/MyPythonBot
+        dest: "{{ lookup('env', 'HOME') }}/MyPythonBot/ansible/PythonBot"
+
+    - name: Install libpq-dev и python3-dev
+      package:
+        name: "{{ item }}"
+      loop:
+        - libpq-dev
+        - python3-dev
+
+    - name: install packets from requirements
+      pip:
+        requirements: "{{ lookup('env', 'HOME') }}/MyPythonBot/ansible/PythonBot/bot/requirements.txt"
+
+    - name: Create the .env
+      file:
+        path: "{{ lookup('env', 'HOME') }}/MyPythonBot/ansible/PythonBot/bot/.env"
+        state: touch 
+        mode: u=rw,g=rw,o=r
+
+    - name: Insert .env file
+      copy:
+        content: |
+          TOKEN = "{{ token }}"
+          RM_HOST = {{ master_ip }}
+          RM_PORT = 22
+          RM_USER = {{ ansible_user }}
+          RM_PASSWORD = {{ ansible_password }}
+          DB_USER = postgres
+          DB_PASSWORD = {{ postgress_pass }}
+          DB_HOST = {{ master_ip }}
+          DB_PORT = 5432
+          DB_DATABASE = db_pythonbot
+        dest: "{{ lookup('env', 'HOME') }}/MyPythonBot/ansible/PythonBot/bot/.env"
+
+    - name: start PythonBot
+      shell: "python {{ lookup('env', 'HOME') }}/MyPythonBot/ansible/PythonBot/bot/My_bot.py"    
+
+
+        
+
+
+    
+
+
